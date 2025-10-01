@@ -1,10 +1,9 @@
 streamlit
 numpy
-sqlite3
 gtts
 sentence-transformers
-speechrecognition
-pyaudio
+SpeechRecognition
+PyAudio
 plotly
 pandas
 rich
