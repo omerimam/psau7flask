@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# coding: utf-8
 import streamlit as st
 import sqlite3
 import numpy as np
@@ -15,7 +15,9 @@ DB_NAME = "demo_student_tasks.db"
 SEARCH_TOP_K = 5
 EMBEDDING_DTYPE = np.float32
 
+# ---------------------------------------
 # تحميل نموذج SentenceTransformer
+# ---------------------------------------
 @st.cache_resource
 def get_model():
     return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
@@ -173,58 +175,63 @@ def text_to_speech(text: str, lang="ar"):
     return bio
 
 # ---------------------------------------
-# Speech to Text
+# Audio to Text (مايك مباشر)
 # ---------------------------------------
-def audio_to_text(audio_file):
+def record_and_recognize(duration=5):
     r = sr.Recognizer()
-    with sr.AudioFile(audio_file) as source:
-        audio_data = r.record(source)
-        try:
-            text = r.recognize_google(audio_data, language="ar-AR")
-            return text
-        except sr.UnknownValueError:
-            return "لم يتم التعرف على الكلام"
-        except sr.RequestError:
-            return "خطأ في خدمة التعرف على الكلام"
+    with sr.Microphone() as source:
+        st.info(f"سجل كلامك لمدة {duration} ثواني...")
+        audio_data = r.record(source, duration=duration)
+    try:
+        text = r.recognize_google(audio_data, language="ar-AR")
+    except:
+        text = "تعذر التعرف على الصوت"
+    return text
 
 # ---------------------------------------
-# إشعارات المهام القادمة اليوم/الساعة القادمة
+# إشعارات بالمهام القادمة خلال ساعة
 # ---------------------------------------
-def upcoming_tasks(student_id):
+def upcoming_tasks_alert(student_id):
+    now = datetime.now()
+    upcoming = now + timedelta(hours=1)
     conn = get_conn()
     cur = conn.cursor()
-    now = datetime.now()
-    next_hour = now + timedelta(hours=1)
     cur.execute("SELECT Title, DueDate FROM Tasks WHERE StudentID=? AND Done=0", (student_id,))
     rows = cur.fetchall()
+    conn.close()
     alerts = []
     for r in rows:
         due = datetime.strptime(r["DueDate"], "%Y-%m-%d")
-        if due.date() == now.date():
-            alerts.append(f"اليوم: {r['Title']} موعد التسليم: {r['DueDate']}")
-        elif due.date() == next_hour.date() and due.hour == next_hour.hour:
-            alerts.append(f"خلال ساعة: {r['Title']} موعد التسليم: {r['DueDate']}")
-    conn.close()
+        if due.date() == upcoming.date() and due.hour == upcoming.hour:
+            alerts.append(r["Title"])
     return alerts
 
 # ---------------------------------------
-# واجهة Streamlit
+# Streamlit UI
 # ---------------------------------------
-st.title("المنظم الأكاديمي الذكي")
+st.set_page_config(page_title="المنظم الأكاديمي الذكي", layout="wide")
+st.markdown("""
+<style>
+body { background-color: #f0f2f6; }
+h1 { color: #4B0082; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📚 المنظم الأكاديمي الذكي")
 
 init_db()
 seed_demo_data()
 
-menu = ["تسجيل الدخول", "عرض الجدول الدراسي", "عرض المهام", "إضافة مهمة",
-        "بحث ذكي", "نص إلى كلام", "صوت إلى نص", "الإشعارات"]
+if "student_id" not in st.session_state:
+    st.session_state.student_id = None
+
+menu = ["تسجيل الدخول", "عرض الجدول الدراسي", "عرض المهام", "إضافة مهمة", "بحث ذكي",
+        "نص إلى كلام", "صوت مباشر إلى نص"]
 choice = st.sidebar.selectbox("القائمة", menu)
 
 # ---------------------------------------
 # تسجيل الدخول
 # ---------------------------------------
-if "student_id" not in st.session_state:
-    st.session_state.student_id = None
-
 if choice == "تسجيل الدخول":
     st.subheader("تسجيل الدخول")
     username = st.text_input("اسم المستخدم")
@@ -253,7 +260,7 @@ if choice == "عرض الجدول الدراسي" and st.session_state.student_i
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        st.write(f"{r['Day']}: {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}")
+        st.markdown(f"<b>{r['Day']}:</b> {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}", unsafe_allow_html=True)
 
 # ---------------------------------------
 # عرض المهام
@@ -261,13 +268,16 @@ if choice == "عرض الجدول الدراسي" and st.session_state.student_i
 if choice == "عرض المهام" and st.session_state.student_id:
     st.subheader("المهام")
     student_id = st.session_state.student_id
+    alerts = upcoming_tasks_alert(student_id)
+    if alerts:
+        st.warning(f"⚠️ المهام القادمة خلال الساعة: {', '.join(alerts)}")
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT TaskID, Title, DueDate, EstHours, Priority, Done FROM Tasks WHERE StudentID=? ORDER BY DueDate", (student_id,))
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        st.write(f"[{'✔' if r['Done'] else '❌'}] {r['Title']} | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
+        st.markdown(f"[{'✔' if r['Done'] else '❌'}] <b>{r['Title']}</b> | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات", unsafe_allow_html=True)
 
 # ---------------------------------------
 # إضافة مهمة
@@ -302,12 +312,12 @@ if choice == "بحث ذكي" and st.session_state.student_id:
         ensure_embeddings_for_student(student_id)
         results = semantic_search(student_id, query, top_k=top_k)
         for r, score in results:
-            st.write(f"[{score:.2f}] {r['Title']} | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
+            st.markdown(f"[{score:.2f}] <b>{r['Title']}</b> | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات", unsafe_allow_html=True)
 
 # ---------------------------------------
-# تحويل نص إلى كلام
+# نص إلى كلام
 # ---------------------------------------
-if choice == "نص إلى كلام" and st.session_state.student_id:
+if choice == "نص إلى كلام":
     st.subheader("تحويل النص إلى كلام")
     text = st.text_area("النص")
     lang = st.selectbox("اللغة", ["ar", "en"])
@@ -316,26 +326,12 @@ if choice == "نص إلى كلام" and st.session_state.student_id:
         st.audio(bio, format="audio/mp3")
 
 # ---------------------------------------
-# تحويل صوت إلى نص
+# صوت مباشر إلى نص
 # ---------------------------------------
-if choice == "صوت إلى نص" and st.session_state.student_id:
-    st.subheader("تحويل الصوت إلى نص")
-    audio_file = st.file_uploader("اختر ملف صوتي (WAV أو MP3)", type=["wav", "mp3"])
-    if audio_file is not None:
-        with open("temp_audio.wav", "wb") as f:
-            f.write(audio_file.getbuffer())
-        st.info("جارٍ تحويل الصوت إلى نص...")
-        result_text = audio_to_text("temp_audio.wav")
-        st.text_area("النص الناتج", value=result_text, height=200)
-
-# ---------------------------------------
-# إشعارات المهام القادمة
-# ---------------------------------------
-if choice == "الإشعارات" and st.session_state.student_id:
-    st.subheader("إشعارات المهام القادمة")
-    alerts = upcoming_tasks(st.session_state.student_id)
-    if alerts:
-        for alert in alerts:
-            st.warning(alert)
-    else:
-        st.success("لا توجد مهام قريبة اليوم أو خلال الساعة القادمة")
+if choice == "صوت مباشر إلى نص" and st.session_state.student_id:
+    st.subheader("تسجيل صوت وتحويله إلى نص مباشر")
+    duration = st.slider("مدة التسجيل بالثواني", 1, 10, 5)
+    if st.button("ابدأ التسجيل"):
+        text_result = record_and_recognize(duration=duration)
+        st.success("تم التحويل:")
+        st.write(text_result)
