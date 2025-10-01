@@ -1,6 +1,4 @@
-Flask
-flasgger
-sentence-transformers
+streamlit
 numpy
-gTTS
-torch
+gtts
+sentence-transformers
