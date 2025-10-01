@@ -1,7 +1,9 @@
 streamlit
-numpy
 sentence-transformers
-gTTS
-SpeechRecognition
-pydub
-
+gtts
+speechrecognition
+pyaudio
+numpy
+pandas
+plotly
+altair
