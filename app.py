@@ -1,42 +1,31 @@
-#!/usr/bin/env python
 # coding: utf-8
-
-from flask import Flask, request, jsonify, send_file
-from flasgger import Swagger
-import threading
-from datetime import datetime, timedelta
+import streamlit as st
 import sqlite3
 import numpy as np
+from datetime import date, timedelta, datetime
 from gtts import gTTS
 from io import BytesIO
-import os
 from sentence_transformers import SentenceTransformer
+import threading
+import time
 
-#  Flask وSwagger
-app = Flask(__name__)
-swagger = Swagger(app)
-
-# إعدادات المتغيرات
+# ---------------------------------------
+# إعدادات عامة
+# ---------------------------------------
 DB_NAME = "demo_student_tasks.db"
 SEARCH_TOP_K = 5
 EMBEDDING_DTYPE = np.float32
 
 # تحميل نموذج SentenceTransformer
-_model_lock = threading.Lock()
-_model = None
-embedding_dim = None
-
+@st.cache_resource
 def get_model():
-    global _model, embedding_dim
-    with _model_lock:
-        if _model is None:
-            _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-            embedding_dim = _model.get_sentence_embedding_dimension()
-        return _model
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 model = get_model()
 
+# ---------------------------------------
 # قاعدة البيانات
+# ---------------------------------------
 def get_conn():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -95,9 +84,7 @@ def seed_demo_data():
         conn.close()
         return
 
-    from datetime import date, timedelta
     today = date.today()
-
     cur.execute("INSERT INTO Students (Username, Password, FullName, Department) VALUES (?, ?, ?, ?)",
                 ("ahmed", "1234", "أحمد محمد", "علوم الحاسوب"))
     student_id = cur.lastrowid
@@ -121,7 +108,9 @@ def seed_demo_data():
     conn.commit()
     conn.close()
 
+# ---------------------------------------
 # Embeddings
+# ---------------------------------------
 def vector_to_blob(vec: np.ndarray) -> bytes:
     return np.asarray(vec, dtype=EMBEDDING_DTYPE).tobytes()
 
@@ -174,7 +163,9 @@ def semantic_search(student_id: int, query: str, top_k=SEARCH_TOP_K):
     conn.close()
     return candidates[:top_k]
 
-# TTS
+# ---------------------------------------
+# Text to Speech
+# ---------------------------------------
 def text_to_speech(text: str, lang="ar"):
     tts = gTTS(text, lang=lang)
     bio = BytesIO()
@@ -182,178 +173,185 @@ def text_to_speech(text: str, lang="ar"):
     bio.seek(0)
     return bio
 
-# تنبيهات قبل ساعة
-def check_alerts():
+# ---------------------------------------
+# التوصيات الذكية
+# ---------------------------------------
+def daily_recommendations(student_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    today = date.today()
+    cur.execute("SELECT Title, DueDate, EstHours, Priority, Done FROM Tasks WHERE StudentID=? AND Done=0", (student_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    recommendations = []
+    priority_map = {"High": 3, "Medium": 2, "Low": 1}
+    
+    for r in rows:
+        due = datetime.strptime(r["DueDate"], "%Y-%m-%d").date()
+        days_left = (due - today).days
+        score = priority_map.get(r["Priority"], 1) * (1 / (days_left+1))
+        recommendations.append((r, score))
+    
+    recommendations.sort(key=lambda x: x[1], reverse=True)
+    return recommendations
+
+# ---------------------------------------
+# التنبيهات الحية
+# ---------------------------------------
+def upcoming_alerts(student_id: int):
     conn = get_conn()
     cur = conn.cursor()
     now = datetime.now()
-    upcoming = now + timedelta(hours=1)
-    cur.execute("SELECT T.Title, T.DueDate, S.FullName "
-                "FROM Tasks T JOIN Students S ON T.StudentID=S.StudentID "
-                "WHERE Done=0")
+    upcoming_hour = now + timedelta(hours=1)
+    cur.execute("SELECT Title, DueDate FROM Tasks WHERE StudentID=? AND Done=0", (student_id,))
     rows = cur.fetchall()
+    conn.close()
+    
+    alerts = []
     for r in rows:
         due = datetime.strptime(r["DueDate"], "%Y-%m-%d")
-        if due.date() == upcoming.date() and due.hour == upcoming.hour:
-            print(f"تنبيه للطالب {r['FullName']}: المهمة '{r['Title']}' ستنتهي خلال ساعة!")
-    conn.close()
+        if due.date() == now.date():
+            alerts.append(f"⚠️ المهمة '{r['Title']}' مستحقة اليوم ({r['DueDate']})")
+        elif due.date() == upcoming_hour.date() and due.hour == upcoming_hour.hour:
+            alerts.append(f"⏰ المهمة '{r['Title']}' ستنتهي خلال ساعة ({r['DueDate']})")
+    return alerts
 
-# Flask Endpoints
-@app.route("/health")
-def health():
-    return jsonify({"status":"ok"})
+# ---------------------------------------
+# واجهة Streamlit
+# ---------------------------------------
+st.set_page_config(page_title="المنظم الأكاديمي الذكي", layout="wide")
+st.title("📚 المنظم الأكاديمي الذكي")
 
-@app.route("/login", methods=["POST"])
-def api_login():
-    payload = request.json
-    if not payload: 
-        return jsonify({"error":"أرسل JSON يحتوي username و password"}), 400
-    username = payload.get("username")
-    password = payload.get("password")
-    
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT StudentID, FullName, Department FROM Students WHERE Username=? AND Password=?", (username,password))
-    row = cur.fetchone()
-    conn.close()
-    
-    if not row:
-        return jsonify({"error":"اسم المستخدم أو كلمة المرور غير صحيحة"}), 401
-    
-    return jsonify({
-        "student_id": row["StudentID"],
-        "full_name": row["FullName"],
-        "department": row["Department"],
-        "message": f"مرحباً {row['FullName']}"
-    })
+init_db()
+seed_demo_data()
 
-@app.route("/schedule/<int:student_id>")
-def api_schedule(student_id):
+if "student_id" not in st.session_state:
+    st.session_state.student_id = None
+
+menu = ["🏠 تسجيل الدخول", "📅 الجدول الدراسي", "📝 عرض المهام", "➕ إضافة مهمة", "🔍 بحث ذكي", "🧠 توصيات ذكية", "🔔 تنبيهات", "🔊 نص إلى كلام"]
+choice = st.sidebar.selectbox("القائمة", menu)
+
+priority_colors = {"High": "red", "Medium": "orange", "Low": "green"}
+
+# ------------------------------
+# تسجيل الدخول
+# ------------------------------
+if choice == "🏠 تسجيل الدخول":
+    st.subheader("تسجيل الدخول")
+    username = st.text_input("اسم المستخدم")
+    password = st.text_input("كلمة المرور", type="password")
+    if st.button("دخول"):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT StudentID, FullName, Department FROM Students WHERE Username=? AND Password=?", (username,password))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            st.success(f"مرحباً {row['FullName']} من قسم {row['Department']}")
+            st.session_state.student_id = row["StudentID"]
+        else:
+            st.error("اسم المستخدم أو كلمة المرور غير صحيحة")
+
+# ------------------------------
+# عرض الجدول الدراسي
+# ------------------------------
+if choice == "📅 الجدول الدراسي" and st.session_state.student_id:
+    st.subheader("جدولك الدراسي")
+    student_id = st.session_state.student_id
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT Day, StartTime, EndTime, Subject, Room FROM Schedules WHERE StudentID=? ORDER BY Day, StartTime", (student_id,))
     rows = cur.fetchall()
     conn.close()
-    
-    schedule = [{"day": r["Day"], "start_time": r["StartTime"], "end_time": r["EndTime"], 
-                 "subject": r["Subject"], "room": r["Room"]} for r in rows]
-    return jsonify(schedule)
+    for r in rows:
+        st.write(f"📌 {r['Day']}: {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}")
 
-@app.route("/tasks/<int:student_id>")
-def api_tasks(student_id):
+# ------------------------------
+# عرض المهام
+# ------------------------------
+if choice == "📝 عرض المهام" and st.session_state.student_id:
+    st.subheader("مهامك")
+    student_id = st.session_state.student_id
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT TaskID, Title, DueDate, EstHours, Priority, Done FROM Tasks WHERE StudentID=? ORDER BY DueDate", (student_id,))
     rows = cur.fetchall()
     conn.close()
-    
-    tasks = [{"task_id": r["TaskID"], "title": r["Title"], "due_date": r["DueDate"],
-              "est_hours": r["EstHours"], "priority": r["Priority"], "done": bool(r["Done"])} for r in rows]
-    return jsonify(tasks)
+    for r in rows:
+        color = priority_colors.get(r["Priority"], "black")
+        status = "✔" if r["Done"] else "❌"
+        st.markdown(f"<span style='color:{color}'>{status} {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات</span>", unsafe_allow_html=True)
 
-@app.route("/task/add", methods=["POST"])
-def api_add_task():
-    data = request.json
-    required = ["student_id", "title", "due_date"]
-    for k in required:
-        if k not in data:
-            return jsonify({"error": f"{k} مطلوب"}), 400
-    
-    student_id = data["student_id"]
-    title = data["title"]
-    due_date = data["due_date"]
-    est_hours = data.get("est_hours", 1.0)
-    priority = data.get("priority", "Medium")
-    
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO Tasks (StudentID, Title, DueDate, EstHours, Priority, Done) VALUES (?,?,?,?,?,0)",
-                (student_id, title, due_date, est_hours, priority))
-    task_id = cur.lastrowid
-    compute_and_store_embedding(task_id, title, conn=conn)
-    conn.commit()
-    conn.close()
-    
-    return jsonify({"message": "تم إضافة المهمة", "task_id": task_id})
+# ------------------------------
+# إضافة مهمة
+# ------------------------------
+if choice == "➕ إضافة مهمة" and st.session_state.student_id:
+    st.subheader("إضافة مهمة جديدة")
+    student_id = st.session_state.student_id
+    title = st.text_input("عنوان المهمة")
+    due_date = st.date_input("تاريخ التسليم")
+    est_hours = st.number_input("الوقت المتوقع (ساعات)", min_value=0.5, max_value=24.0, value=1.0)
+    priority = st.selectbox("الأولوية", ["Low", "Medium", "High"])
+    if st.button("إضافة"):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO Tasks (StudentID, Title, DueDate, EstHours, Priority, Done) VALUES (?,?,?,?,?,0)",
+                    (student_id, title, str(due_date), est_hours, priority))
+        task_id = cur.lastrowid
+        compute_and_store_embedding(task_id, title, conn=conn)
+        conn.commit()
+        conn.close()
+        st.success("تم إضافة المهمة بنجاح!")
 
-@app.route("/task/update/<int:task_id>", methods=["PUT"])
-def api_update_task(task_id):
-    data = request.json
-    if not data: 
-        return jsonify({"error":"إرسال بيانات JSON مطلوبة"}), 400
-    
-    allowed = {"title", "due_date", "est_hours", "priority", "done"}
-    updates, params = [], []
-    
-    for k, v in data.items():
-        if k in allowed:
-            col = k if k != "est_hours" else "EstHours"
-            updates.append(f"{col} = ?")
-            params.append(v)
-    
-    if not updates: 
-        return jsonify({"error":"لا توجد حقول صالحة للتحديث"}), 400
-    
-    params.append(task_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(f"UPDATE Tasks SET {','.join(updates)} WHERE TaskID=?", params)
-    
-    if "title" in data:
-        cur.execute("SELECT Title FROM Tasks WHERE TaskID=?", (task_id,))
-        row = cur.fetchone()
-        if row: 
-            compute_and_store_embedding(task_id, row["Title"], conn=conn)
-    
-    conn.commit()
-    conn.close()
-    return jsonify({"message":"تم تعديل المهمة", "task_id": task_id})
+# ------------------------------
+# البحث الذكي
+# ------------------------------
+if choice == "🔍 بحث ذكي" and st.session_state.student_id:
+    st.subheader("بحث ذكي عن المهام")
+    student_id = st.session_state.student_id
+    query = st.text_input("اكتب نص البحث")
+    top_k = st.number_input("عدد النتائج", min_value=1, max_value=10, value=5)
+    if st.button("بحث"):
+        ensure_embeddings_for_student(student_id)
+        results = semantic_search(student_id, query, top_k=top_k)
+        for r, score in results:
+            st.info(f"[{score:.2f}] {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
 
-@app.route("/task/search", methods=["POST"])
-def api_task_search():
-    data = request.json
-    if not data: 
-        return jsonify({"error":"send JSON with student_id and query"}), 400
-    
-    student_id = data.get("student_id")
-    query = data.get("query")
-    top_k = data.get("top_k", SEARCH_TOP_K)
-    
-    if not student_id or not query:
-        return jsonify({"error":"student_id and query required"}), 400
-    
-    ensure_embeddings_for_student(student_id)
-    results = semantic_search(student_id, query, top_k=top_k)
-    
-    out = []
-    for r, score in results:
-        out.append({
-            "task_id": r["TaskID"],
-            "title": r["Title"],
-            "due_date": r["DueDate"],
-            "est_hours": r["EstHours"],
-            "priority": r["Priority"],
-            "done": bool(r["Done"]),
-            "score": score
-        })
-    
-    return jsonify({"query": query, "results": out})
+# ------------------------------
+# التوصيات الذكية
+# ------------------------------
+if choice == "🧠 توصيات ذكية" and st.session_state.student_id:
+    st.subheader("توصيات اليوم للمهام")
+    student_id = st.session_state.student_id
+    recs = daily_recommendations(student_id)
+    if recs:
+        for r, score in recs[:5]:
+            color = priority_colors.get(r['Priority'], "black")
+            st.markdown(f"<span style='color:{color}'>📌 {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات</span>", unsafe_allow_html=True)
+    else:
+        st.success("لا توجد مهام مستحقة اليوم أو قريبة الموعد.")
 
-@app.route("/tts", methods=["POST"])
-def api_tts():
-    data = request.json
-    if not data or "text" not in data: 
-        return jsonify({"error":"text required"}), 400
-    
-    text = data["text"]
-    lang = data.get("lang", "ar")
-    bio = text_to_speech(text, lang)
-    
-    return send_file(bio, mimetype="audio/mpeg", as_attachment=False, download_name="speech.mp3")
+# ------------------------------
+# التنبيهات الحية
+# ------------------------------
+if choice == "🔔 تنبيهات" and st.session_state.student_id:
+    st.subheader("تنبيهات المهام القادمة")
+    student_id = st.session_state.student_id
+    alerts = upcoming_alerts(student_id)
+    if alerts:
+        for alert in alerts:
+            st.warning(alert)
+    else:
+        st.success("لا توجد مهام قريبة الموعد خلال الساعة القادمة أو اليوم.")
 
-if __name__ == "__main__":
-    print("Initializing DB and seeding demo data...")
-    init_db()
-    seed_demo_data()
-    print("Server running...")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+# ------------------------------
+# نص إلى كلام
+# ------------------------------
+if choice == "🔊 نص إلى كلام":
+    st.subheader("تحويل النص إلى كلام")
+    text = st.text_area("النص")
+    lang = st.selectbox("اللغة", ["ar", "en"])
+    if st.button("تشغيل"):
+        bio = text_to_speech(text, lang)
+        st.audio(bio, format="audio/mp3")
