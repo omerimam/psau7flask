@@ -1,0 +1,6 @@
+Flask
+flasgger
+sentence-transformers
+numpy
+gTTS
+torch
