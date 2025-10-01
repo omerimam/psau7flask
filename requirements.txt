@@ -1,4 +1,7 @@
 streamlit
 numpy
-gtts
+sqlite3
 sentence-transformers
+gTTS
+SpeechRecognition
+pydub
