@@ -1,9 +1,13 @@
 streamlit
-sentence-transformers
+numpy
+sqlite3
 gtts
+sentence-transformers
 speechrecognition
 pyaudio
-numpy
-pandas
 plotly
-altair
+pandas
+rich
+markdown-it-py
+pygments
+mdurl
