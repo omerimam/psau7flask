@@ -1,4 +1,4 @@
-# coding: utf-8
+# -*- coding: utf-8 -*-
 import streamlit as st
 import sqlite3
 import numpy as np
@@ -6,8 +6,7 @@ from datetime import date, timedelta, datetime
 from gtts import gTTS
 from io import BytesIO
 from sentence_transformers import SentenceTransformer
-import threading
-import time
+import speech_recognition as sr
 
 # ---------------------------------------
 # إعدادات عامة
@@ -174,70 +173,59 @@ def text_to_speech(text: str, lang="ar"):
     return bio
 
 # ---------------------------------------
-# التوصيات الذكية
+# Speech to Text
 # ---------------------------------------
-def daily_recommendations(student_id: int):
-    conn = get_conn()
-    cur = conn.cursor()
-    today = date.today()
-    cur.execute("SELECT Title, DueDate, EstHours, Priority, Done FROM Tasks WHERE StudentID=? AND Done=0", (student_id,))
-    rows = cur.fetchall()
-    conn.close()
-    
-    recommendations = []
-    priority_map = {"High": 3, "Medium": 2, "Low": 1}
-    
-    for r in rows:
-        due = datetime.strptime(r["DueDate"], "%Y-%m-%d").date()
-        days_left = (due - today).days
-        score = priority_map.get(r["Priority"], 1) * (1 / (days_left+1))
-        recommendations.append((r, score))
-    
-    recommendations.sort(key=lambda x: x[1], reverse=True)
-    return recommendations
+def audio_to_text(audio_file):
+    r = sr.Recognizer()
+    with sr.AudioFile(audio_file) as source:
+        audio_data = r.record(source)
+        try:
+            text = r.recognize_google(audio_data, language="ar-AR")
+            return text
+        except sr.UnknownValueError:
+            return "لم يتم التعرف على الكلام"
+        except sr.RequestError:
+            return "خطأ في خدمة التعرف على الكلام"
 
 # ---------------------------------------
-# التنبيهات الحية
+# إشعارات المهام القادمة اليوم/الساعة القادمة
 # ---------------------------------------
-def upcoming_alerts(student_id: int):
+def upcoming_tasks(student_id):
     conn = get_conn()
     cur = conn.cursor()
     now = datetime.now()
-    upcoming_hour = now + timedelta(hours=1)
+    next_hour = now + timedelta(hours=1)
     cur.execute("SELECT Title, DueDate FROM Tasks WHERE StudentID=? AND Done=0", (student_id,))
     rows = cur.fetchall()
-    conn.close()
-    
     alerts = []
     for r in rows:
         due = datetime.strptime(r["DueDate"], "%Y-%m-%d")
         if due.date() == now.date():
-            alerts.append(f"⚠️ المهمة '{r['Title']}' مستحقة اليوم ({r['DueDate']})")
-        elif due.date() == upcoming_hour.date() and due.hour == upcoming_hour.hour:
-            alerts.append(f"⏰ المهمة '{r['Title']}' ستنتهي خلال ساعة ({r['DueDate']})")
+            alerts.append(f"اليوم: {r['Title']} موعد التسليم: {r['DueDate']}")
+        elif due.date() == next_hour.date() and due.hour == next_hour.hour:
+            alerts.append(f"خلال ساعة: {r['Title']} موعد التسليم: {r['DueDate']}")
+    conn.close()
     return alerts
 
 # ---------------------------------------
 # واجهة Streamlit
 # ---------------------------------------
-st.set_page_config(page_title="المنظم الأكاديمي الذكي", layout="wide")
-st.title("📚 المنظم الأكاديمي الذكي")
+st.title("المنظم الأكاديمي الذكي")
 
 init_db()
 seed_demo_data()
 
+menu = ["تسجيل الدخول", "عرض الجدول الدراسي", "عرض المهام", "إضافة مهمة",
+        "بحث ذكي", "نص إلى كلام", "صوت إلى نص", "الإشعارات"]
+choice = st.sidebar.selectbox("القائمة", menu)
+
+# ---------------------------------------
+# تسجيل الدخول
+# ---------------------------------------
 if "student_id" not in st.session_state:
     st.session_state.student_id = None
 
-menu = ["🏠 تسجيل الدخول", "📅 الجدول الدراسي", "📝 عرض المهام", "➕ إضافة مهمة", "🔍 بحث ذكي", "🧠 توصيات ذكية", "🔔 تنبيهات", "🔊 نص إلى كلام"]
-choice = st.sidebar.selectbox("القائمة", menu)
-
-priority_colors = {"High": "red", "Medium": "orange", "Low": "green"}
-
-# ------------------------------
-# تسجيل الدخول
-# ------------------------------
-if choice == "🏠 تسجيل الدخول":
+if choice == "تسجيل الدخول":
     st.subheader("تسجيل الدخول")
     username = st.text_input("اسم المستخدم")
     password = st.text_input("كلمة المرور", type="password")
@@ -253,11 +241,11 @@ if choice == "🏠 تسجيل الدخول":
         else:
             st.error("اسم المستخدم أو كلمة المرور غير صحيحة")
 
-# ------------------------------
+# ---------------------------------------
 # عرض الجدول الدراسي
-# ------------------------------
-if choice == "📅 الجدول الدراسي" and st.session_state.student_id:
-    st.subheader("جدولك الدراسي")
+# ---------------------------------------
+if choice == "عرض الجدول الدراسي" and st.session_state.student_id:
+    st.subheader("الجدول الدراسي")
     student_id = st.session_state.student_id
     conn = get_conn()
     cur = conn.cursor()
@@ -265,13 +253,13 @@ if choice == "📅 الجدول الدراسي" and st.session_state.student_id:
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        st.write(f"📌 {r['Day']}: {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}")
+        st.write(f"{r['Day']}: {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}")
 
-# ------------------------------
+# ---------------------------------------
 # عرض المهام
-# ------------------------------
-if choice == "📝 عرض المهام" and st.session_state.student_id:
-    st.subheader("مهامك")
+# ---------------------------------------
+if choice == "عرض المهام" and st.session_state.student_id:
+    st.subheader("المهام")
     student_id = st.session_state.student_id
     conn = get_conn()
     cur = conn.cursor()
@@ -279,14 +267,12 @@ if choice == "📝 عرض المهام" and st.session_state.student_id:
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        color = priority_colors.get(r["Priority"], "black")
-        status = "✔" if r["Done"] else "❌"
-        st.markdown(f"<span style='color:{color}'>{status} {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات</span>", unsafe_allow_html=True)
+        st.write(f"[{'✔' if r['Done'] else '❌'}] {r['Title']} | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
 
-# ------------------------------
+# ---------------------------------------
 # إضافة مهمة
-# ------------------------------
-if choice == "➕ إضافة مهمة" and st.session_state.student_id:
+# ---------------------------------------
+if choice == "إضافة مهمة" and st.session_state.student_id:
     st.subheader("إضافة مهمة جديدة")
     student_id = st.session_state.student_id
     title = st.text_input("عنوان المهمة")
@@ -304,10 +290,10 @@ if choice == "➕ إضافة مهمة" and st.session_state.student_id:
         conn.close()
         st.success("تم إضافة المهمة بنجاح!")
 
-# ------------------------------
-# البحث الذكي
-# ------------------------------
-if choice == "🔍 بحث ذكي" and st.session_state.student_id:
+# ---------------------------------------
+# بحث ذكي
+# ---------------------------------------
+if choice == "بحث ذكي" and st.session_state.student_id:
     st.subheader("بحث ذكي عن المهام")
     student_id = st.session_state.student_id
     query = st.text_input("اكتب نص البحث")
@@ -316,42 +302,40 @@ if choice == "🔍 بحث ذكي" and st.session_state.student_id:
         ensure_embeddings_for_student(student_id)
         results = semantic_search(student_id, query, top_k=top_k)
         for r, score in results:
-            st.info(f"[{score:.2f}] {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
+            st.write(f"[{score:.2f}] {r['Title']} | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات")
 
-# ------------------------------
-# التوصيات الذكية
-# ------------------------------
-if choice == "🧠 توصيات ذكية" and st.session_state.student_id:
-    st.subheader("توصيات اليوم للمهام")
-    student_id = st.session_state.student_id
-    recs = daily_recommendations(student_id)
-    if recs:
-        for r, score in recs[:5]:
-            color = priority_colors.get(r['Priority'], "black")
-            st.markdown(f"<span style='color:{color}'>📌 {r['Title']} | مستحقة: {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات</span>", unsafe_allow_html=True)
-    else:
-        st.success("لا توجد مهام مستحقة اليوم أو قريبة الموعد.")
-
-# ------------------------------
-# التنبيهات الحية
-# ------------------------------
-if choice == "🔔 تنبيهات" and st.session_state.student_id:
-    st.subheader("تنبيهات المهام القادمة")
-    student_id = st.session_state.student_id
-    alerts = upcoming_alerts(student_id)
-    if alerts:
-        for alert in alerts:
-            st.warning(alert)
-    else:
-        st.success("لا توجد مهام قريبة الموعد خلال الساعة القادمة أو اليوم.")
-
-# ------------------------------
-# نص إلى كلام
-# ------------------------------
-if choice == "🔊 نص إلى كلام":
+# ---------------------------------------
+# تحويل نص إلى كلام
+# ---------------------------------------
+if choice == "نص إلى كلام" and st.session_state.student_id:
     st.subheader("تحويل النص إلى كلام")
     text = st.text_area("النص")
     lang = st.selectbox("اللغة", ["ar", "en"])
     if st.button("تشغيل"):
         bio = text_to_speech(text, lang)
         st.audio(bio, format="audio/mp3")
+
+# ---------------------------------------
+# تحويل صوت إلى نص
+# ---------------------------------------
+if choice == "صوت إلى نص" and st.session_state.student_id:
+    st.subheader("تحويل الصوت إلى نص")
+    audio_file = st.file_uploader("اختر ملف صوتي (WAV أو MP3)", type=["wav", "mp3"])
+    if audio_file is not None:
+        with open("temp_audio.wav", "wb") as f:
+            f.write(audio_file.getbuffer())
+        st.info("جارٍ تحويل الصوت إلى نص...")
+        result_text = audio_to_text("temp_audio.wav")
+        st.text_area("النص الناتج", value=result_text, height=200)
+
+# ---------------------------------------
+# إشعارات المهام القادمة
+# ---------------------------------------
+if choice == "الإشعارات" and st.session_state.student_id:
+    st.subheader("إشعارات المهام القادمة")
+    alerts = upcoming_tasks(st.session_state.student_id)
+    if alerts:
+        for alert in alerts:
+            st.warning(alert)
+    else:
+        st.success("لا توجد مهام قريبة اليوم أو خلال الساعة القادمة")
