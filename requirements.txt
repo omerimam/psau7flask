@@ -1,12 +1,7 @@
 streamlit
 numpy
-gtts
-sentence-transformers
-SpeechRecognition
-PyAudio
-plotly
 pandas
-rich
-markdown-it-py
-pygments
-mdurl
+gTTS
+sentence-transformers
+speechrecognition
+pydub
