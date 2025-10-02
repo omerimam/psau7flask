@@ -175,13 +175,12 @@ def text_to_speech(text: str, lang="ar"):
     return bio
 
 # ---------------------------------------
-# Audio to Text (مايك مباشر)
+# رفع ملف صوت وتحويله إلى نص
 # ---------------------------------------
-def record_and_recognize(duration=5):
+def recognize_uploaded_audio(uploaded_file):
     r = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.info(f"سجل كلامك لمدة {duration} ثواني...")
-        audio_data = r.record(source, duration=duration)
+    with sr.AudioFile(uploaded_file) as source:
+        audio_data = r.record(source)
     try:
         text = r.recognize_google(audio_data, language="ar-AR")
     except:
@@ -210,12 +209,6 @@ def upcoming_tasks_alert(student_id):
 # Streamlit UI
 # ---------------------------------------
 st.set_page_config(page_title="المنظم الأكاديمي الذكي", layout="wide")
-st.markdown("""
-<style>
-body { background-color: #f0f2f6; }
-h1 { color: #4B0082; }
-</style>
-""", unsafe_allow_html=True)
 
 st.title("📚 المنظم الأكاديمي الذكي")
 
@@ -226,12 +219,10 @@ if "student_id" not in st.session_state:
     st.session_state.student_id = None
 
 menu = ["تسجيل الدخول", "عرض الجدول الدراسي", "عرض المهام", "إضافة مهمة", "بحث ذكي",
-        "نص إلى كلام", "صوت مباشر إلى نص"]
+        "نص إلى كلام", "ملف صوت إلى نص"]
 choice = st.sidebar.selectbox("القائمة", menu)
 
-# ---------------------------------------
 # تسجيل الدخول
-# ---------------------------------------
 if choice == "تسجيل الدخول":
     st.subheader("تسجيل الدخول")
     username = st.text_input("اسم المستخدم")
@@ -248,9 +239,7 @@ if choice == "تسجيل الدخول":
         else:
             st.error("اسم المستخدم أو كلمة المرور غير صحيحة")
 
-# ---------------------------------------
 # عرض الجدول الدراسي
-# ---------------------------------------
 if choice == "عرض الجدول الدراسي" and st.session_state.student_id:
     st.subheader("الجدول الدراسي")
     student_id = st.session_state.student_id
@@ -262,9 +251,7 @@ if choice == "عرض الجدول الدراسي" and st.session_state.student_i
     for r in rows:
         st.markdown(f"<b>{r['Day']}:</b> {r['StartTime']} - {r['EndTime']} | {r['Subject']} | {r['Room']}", unsafe_allow_html=True)
 
-# ---------------------------------------
 # عرض المهام
-# ---------------------------------------
 if choice == "عرض المهام" and st.session_state.student_id:
     st.subheader("المهام")
     student_id = st.session_state.student_id
@@ -279,9 +266,7 @@ if choice == "عرض المهام" and st.session_state.student_id:
     for r in rows:
         st.markdown(f"[{'✔' if r['Done'] else '❌'}] <b>{r['Title']}</b> | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات", unsafe_allow_html=True)
 
-# ---------------------------------------
 # إضافة مهمة
-# ---------------------------------------
 if choice == "إضافة مهمة" and st.session_state.student_id:
     st.subheader("إضافة مهمة جديدة")
     student_id = st.session_state.student_id
@@ -300,9 +285,7 @@ if choice == "إضافة مهمة" and st.session_state.student_id:
         conn.close()
         st.success("تم إضافة المهمة بنجاح!")
 
-# ---------------------------------------
 # بحث ذكي
-# ---------------------------------------
 if choice == "بحث ذكي" and st.session_state.student_id:
     st.subheader("بحث ذكي عن المهام")
     student_id = st.session_state.student_id
@@ -314,9 +297,7 @@ if choice == "بحث ذكي" and st.session_state.student_id:
         for r, score in results:
             st.markdown(f"[{score:.2f}] <b>{r['Title']}</b> | {r['DueDate']} | {r['Priority']} | {r['EstHours']} ساعات", unsafe_allow_html=True)
 
-# ---------------------------------------
 # نص إلى كلام
-# ---------------------------------------
 if choice == "نص إلى كلام":
     st.subheader("تحويل النص إلى كلام")
     text = st.text_area("النص")
@@ -325,13 +306,11 @@ if choice == "نص إلى كلام":
         bio = text_to_speech(text, lang)
         st.audio(bio, format="audio/mp3")
 
-# ---------------------------------------
-# صوت مباشر إلى نص
-# ---------------------------------------
-if choice == "صوت مباشر إلى نص" and st.session_state.student_id:
-    st.subheader("تسجيل صوت وتحويله إلى نص مباشر")
-    duration = st.slider("مدة التسجيل بالثواني", 1, 10, 5)
-    if st.button("ابدأ التسجيل"):
-        text_result = record_and_recognize(duration=duration)
+# ملف صوت إلى نص
+if choice == "ملف صوت إلى نص" and st.session_state.student_id:
+    st.subheader("رفع ملف صوت وتحويله إلى نص")
+    uploaded_file = st.file_uploader("ارفع ملف صوتي (wav/mp3)", type=["wav", "mp3"])
+    if uploaded_file is not None:
+        text_result = recognize_uploaded_audio(uploaded_file)
         st.success("تم التحويل:")
         st.write(text_result)
